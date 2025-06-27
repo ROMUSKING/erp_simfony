@@ -7,6 +7,7 @@ pub struct Config {
     pub port: u16,
     pub rate_limit_per_second: u64,
     pub rate_limit_burst_size: u32,
+    pub hmac_secret: String,
     pub session_max_age_seconds: u64,
 }
 
@@ -24,6 +25,9 @@ impl Config {
         let rate_limit_burst_size = env::var("RATE_LIMIT_BURST_SIZE")
             .unwrap_or_else(|_| "20".to_string())
             .parse::<u32>()?;
+        // AUDIT: Ensure HMAC_SECRET is provided, as it's critical for security.
+        // This will error out if the variable is not set, preventing insecure startup.
+        let hmac_secret = env::var("HMAC_SECRET")?;
         let session_max_age_seconds = env::var("SESSION_MAX_AGE_SECONDS")
             .unwrap_or_else(|_| "3600".to_string()) // Defaults to 1 hour
             .parse::<u64>()?;
@@ -33,6 +37,7 @@ impl Config {
             port,
             rate_limit_per_second,
             rate_limit_burst_size,
+            hmac_secret,
             session_max_age_seconds,
         })
     }
