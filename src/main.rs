@@ -1,155 +1,153 @@
+// Main application entrypoint.
+// This file has been updated to be compatible with the latest dependencies
+// specified in Cargo.toml, including rustls v0.23, actix-session v0.9,
+// and actix-governor for rate limiting.
+
+mod auth;
+mod config;
+mod security;
+
+use actix_csrf::CsrfMiddleware;
+use actix_files::Files;
 use actix_governor::{Governor, GovernorConfigBuilder};
-use actix_session::{Session, SessionMiddleware, storage::CookieSessionStore};
-use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder, middleware};
-use actix_web::cookie::{Key, SameSite, time::Duration};
-use rand::{Rng, distributions::Alphanumeric};
-use rustls::{Certificate, PrivateKey, ServerConfig};
+use actix_session::{config::PersistentSession, storage::CookieSessionStore, SessionMiddleware};
+use actix_web::{
+    cookie::{Key, SameSite},
+    web, App, HttpRequest, HttpResponse, HttpServer, Responder,
+};
+use rustls::ServerConfig;
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use std::fs::File;
-use std::io::{BufReader, Write};
-use std::sync::Mutex;
-use tera::{Context, Tera};
-use uuid::Uuid;
-use validator::Validate;
-use serde::Deserialize;
+use std::io::BufReader;
+use tera::Tera;
+use time::Duration;
+use tracing::info;
+use tracing_subscriber::EnvFilter;
+use tracing_actix_web::TracingLogger;
 
-mod errors;
-mod config;
-use crate::errors::AppError;
+use crate::auth::{login_post, AuthGuard, AuthSession};
 use crate::config::Config;
+use crate::errors::AppError;
+use crate::security::{Nonce, SecurityHeaders};
 
-struct AppState {
-    tera: Mutex<Tera>,
+// --- Handlers ---
+
+async fn index(session: AuthSession) -> impl Responder {
+    let username = session.get_username().unwrap_or_else(|| "Guest".to_string());
+    HttpResponse::Ok().body(format!("Welcome, {}!", username))
 }
 
-#[derive(Deserialize, Validate)]
-struct FormData {
-    #[validate(length(min = 1, message = "Input cannot be empty."))]
-    #[validate(length(max = 100, message = "Input must be less than 100 characters."))]
-    user_input: String,
+async fn login_get(tera: web::Data<Tera>, req: HttpRequest) -> Result<impl Responder, AppError> {
+    let mut context = tera::Context::new();
+    context.insert("error", "");
+    let nonce = req
+        .extensions()
+        .get::<Nonce>()
+        .map_or_else(String::new, |n| n.0.clone());
+    context.insert("nonce", &nonce);
+    let rendered = tera.render("login.html", &context)?;
+    Ok(HttpResponse::Ok().content_type("text/html").body(rendered))
 }
 
-fn get_or_create_csrf_token(session: &Session) -> Result<String, AppError> {
-    match session.get::<String>("csrf_token")? {
-        Some(token) => Ok(token),
-        None => {
-            let new_token = Uuid::new_v4().to_string();
-            session.insert("csrf_token", new_token.clone())?;
-            Ok(new_token)
-        }
-    }
+async fn logout(session: AuthSession) -> Result<impl Responder, AppError> {
+    session.logout();
+    Ok(HttpResponse::SeeOther()
+        .append_header(("Location", "/login"))
+        .finish())
 }
 
-#[get("/")]
-async fn index(data: web::Data<AppState>, session: Session) -> Result<impl Responder, AppError> {
-    let tera = data.tera.lock().expect("Failed to lock Tera mutex");
-    let mut ctx = Context::new();
-
-    // **AUDIT FIX**: Generate a nonce for the Content-Security-Policy.
-    let csp_nonce: String = rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(24)
-        .map(char::from)
-        .collect();
-
-    let csrf_token = get_or_create_csrf_token(&session)?;
-    ctx.insert("title", "Final Hardened Composable Enterprise");
-    ctx.insert("csrf_token", &csrf_token);
-    ctx.insert("csp_nonce", &csp_nonce);
-
-    let rendered = tera.render("index.html.tera", &ctx)?;
-
-    // **AUDIT FIX**: Build the dynamic CSP header here instead of using middleware.
-    let csp_header_value = format!(
-        "default-src 'self'; script-src 'self' https://unpkg.com 'nonce-{}'; style-src 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; base-uri 'self';",
-        csp_nonce
-    );
-
-    Ok(HttpResponse::Ok()
-        .insert_header(("Content-Security-Policy", csp_header_value))
-        .content_type("text/html; charset=utf-8")
-        .body(rendered))
-}
-
-#[post("/data")]
-async fn post_data(session: Session, form: web::Form<FormData>, req: web::HttpRequest) -> Result<impl Responder, AppError> {
-    form.validate()?;
-    let req_csrf_token = req.headers().get("X-CSRF-Token").and_then(|v| v.to_str().ok()).unwrap_or("");
-    let session_csrf_token = get_or_create_csrf_token(&session)?;
-    if req_csrf_token != session_csrf_token {
-        tracing::warn!("CSRF token mismatch detected for a request.");
-        return Err(AppError::ValidationError("Invalid security token.".to_string()));
-    }
-    let sanitized_input = html_escape::encode_text(&form.user_input);
-    let html_fragment = format!("<h4>Validation Successful!</h4><p>Server received: <strong>{}</strong></p>", sanitized_input);
-    Ok(HttpResponse::Ok().content_type("text/html").body(html_fragment))
-}
-
-fn load_rustls_config() -> Result<ServerConfig, AppError> {
-    let config = ServerConfig::builder().with_safe_defaults().with_no_client_auth();
-    let cert_file = &mut BufReader::new(File::open("certs/cert.pem")?);
-    let key_file = &mut BufReader::new(File::open("certs/key.pem")?);
-    let cert_chain = certs(cert_file)?.into_iter().map(Certificate).collect();
-    let mut keys: Vec<PrivateKey> = pkcs8_private_keys(key_file)?.into_iter().map(PrivateKey).collect();
-    if keys.is_empty() { return Err(AppError::InternalError("Could not find private key".to_string())); }
-    config.with_single_cert(cert_chain, keys.remove(0)).map_err(|e| AppError::InternalError(format!("TLS config error: {}", e)))
-}
-
-fn load_or_generate_session_key() -> Result<Key, std::io::Error> {
-    let key_path = "session_key.bin";
-    if let Ok(key_data) = std::fs::read(key_path) {
-        if key_data.len() == 64 { return Ok(Key::from(&key_data)); }
-    }
-    let key = Key::generate();
-    let mut file = File::create(key_path)?;
-    file.write_all(key.master())?;
-    tracing::info!("Generated and saved new session key to {}", key_path);
-    Ok(key)
-}
+// --- Main Application Setup ---
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).init();
-    let config = Config::from_env().expect("Failed to load configuration from environment.");
-    let tera = Tera::new("templates/**/*").expect("Failed to initialize Tera.");
-    let app_state = web::Data::new(AppState { tera: Mutex::new(tera) });
-    let secret_key = load_or_generate_session_key().expect("Failed to load or generate session key.");
-    let governor_conf = GovernorConfigBuilder::default().per_second(config.rate_limit_per_second).burst_size(config.rate_limit_burst_size).finish().unwrap();
-    let tls_config = load_rustls_config().expect("Failed to load TLS configuration.");
+    // 1. Setup modern logging with `tracing`
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
 
-    tracing::info!("Starting server at https://{}:{}", config.host, config.port);
+    // 2. Load configuration from .env file using `dotenvy`
+    dotenvy::dotenv().ok();
+    let config = web::Data::new(Config::from_env().expect("Failed to load config"));
+
+    // 3. Load TLS configuration with the updated rustls v0.23 API
+    let tls_config = load_rustls_config();
+
+    // 4. Configure session middleware for actix-session v0.9
+    let session_key = Key::from(config.get_ref().hmac_secret.as_bytes());
+    let session_middleware = SessionMiddleware::builder(CookieSessionStore::default(), session_key)
+        .cookie_name("erp-session".to_string())
+        .cookie_secure(true)
+        .cookie_http_only(true)
+        .cookie_same_site(SameSite::Strict)
+        // Use `time::Duration` for session TTL, required by actix-session v0.9+
+        .session_lifecycle(PersistentSession::default().with_session_ttl(Duration::hours(1)))
+        .build();
+
+    // 5. Configure rate limiting with `actix-governor`
+    // AUDIT FIX: Use values from config instead of hardcoding, per blueprint.
+    let governor_conf = GovernorConfigBuilder::default()
+        .per_second(config.get_ref().rate_limit_per_second)
+        .burst_size(config.get_ref().rate_limit_burst_size)
+        .finish()
+        .unwrap();
+
+    info!("Starting server at https://localhost:8443");
 
     HttpServer::new(move || {
+        let tera = Tera::new("templates/**/*").unwrap();
         App::new()
-            .app_data(app_state.clone())
-            .wrap(middleware::Logger::default())
-            .wrap(Governor::new(&governor_conf))
-            .wrap(
-                SessionMiddleware::builder(CookieSessionStore::default(), secret_key.clone())
-                    .cookie_name("final-enterprise-session".to_string())
-                    .cookie_secure(true)
-                    .cookie_http_only(true)
-                    .cookie_same_site(SameSite::Strict)
-                    // **AUDIT FIX**: Set a fixed session timeout.
-                    .cookie_max_age(Duration::seconds(config.session_max_age_seconds))
-                    .build(),
+            .app_data(config.clone())
+            .app_data(web::Data::new(tera))
+            // Middlewares are wrapped in reverse order of execution
+            .wrap(TracingLogger::default()) // Structured request logging
+            .wrap(Governor::new(&governor_conf)) // Rate limiting for all requests
+            .wrap(SecurityHeaders) // Custom security headers (CSP, etc.)
+            .wrap(session_middleware.clone())
+            .wrap(CsrfMiddleware::new()) // Must be after session to function correctly
+            .service(
+                web::scope("")
+                    .service(web::resource("/").guard(AuthGuard).to(index))
+                    .service(web::resource("/logout").post(logout))
+                    .service(
+                        web::resource("/login")
+                            .route(web::get().to(login_get))
+                            .route(web::post().to(login_post)),
+                    ),
             )
-            // **AUDIT FIX**: CSP is now set dynamically in the request handler.
-            // Other default headers are still set here.
-            .wrap(
-                middleware::DefaultHeaders::new()
-                    .add(("X-Frame-Options", "DENY"))
-                    .add(("X-Content-Type-Options", "nosniff"))
-                    .add(("X-XSS-Protection", "1; mode=block"))
-                    .add(("Referrer-Policy", "strict-origin-when-cross-origin"))
-                    .add(("Permissions-Policy", "camera=(), microphone=(), geolocation=()"))
-                    .add(("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload"))
-            )
-            .service(index)
-            .service(post_data)
-            .service(actix_files::Files::new("/static", "static"))
+            .service(Files::new("/static", "static"))
     })
-    .bind_rustls_0_22((config.host.clone(), config.port), tls_config)?
+    // 6. Use the new binding method for rustls v0.23
+    .bind_rustls_023("127.0.0.1:8443", tls_config)?
     .run()
     .await
+}
+
+// --- Helper Functions ---
+
+/// Loads TLS certificate and key from file for rustls v0.23.
+/// AUDIT FIX: Returns a Result to avoid panicking on I/O errors.
+fn load_rustls_config() -> std::io::Result<ServerConfig> {
+    let config_builder = ServerConfig::builder().with_no_client_auth();
+
+    let cert_file = &mut BufReader::new(File::open("certs/cert.pem")?);
+    let key_file = &mut BufReader::new(File::open("certs/key.pem")?);
+
+    let cert_chain = certs(cert_file)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "Could not parse certificate chain"))?;
+
+    let mut keys = pkcs8_private_keys(key_file)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "Could not parse private key"))?;
+
+    if keys.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Could not locate PKCS 8 private keys in key.pem.",
+        ));
+    }
+
+    config_builder
+        .with_single_cert(cert_chain, keys.remove(0))
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
 }
