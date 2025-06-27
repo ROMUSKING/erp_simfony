@@ -1,59 +1,86 @@
-README: Production-Hardened Composable Enterprise
-This project is a security-hardened starter template for building web applications based on the principles of "The Composable Enterprise" blueprint. It uses a Rust backend with the Actix Web framework and HTMX for dynamic frontends.
-This version incorporates fixes from multiple, in-depth security audits, addressing critical vulnerabilities and implementing best practices for production-level security.
-Key Security Enhancements
-Strict, Nonce-Based Content-Security-Policy (CSP): The application implements a strict CSP that disallows all inline scripts. It generates a unique cryptographic nonce for each request, ensuring that only server-authorized scripts can execute, providing a robust defense against Cross-Site Scripting (XSS).
-Configurable Settings via Environment Variables: Key operational parameters like rate limiting and the application port are now configurable via a .env file, making the application adaptable to different environments without code changes.
-Fixed Session Timeouts: Session cookies are configured with a specific maximum age (e.g., 1 hour), ensuring users are logged out after a period of inactivity, which is a critical security measure against session hijacking.
-Sanitized Logging: Logging practices have been refined to prevent sensitive user data from being written to system logs, mitigating the risk of information disclosure.
-Correct CSRF Protection: A critical flaw in the CSRF token generation logic has been fixed. Tokens are now correctly generated and validated for each session.
-Secure Error Handling: The application no longer leaks internal details in error messages.
-Persistent Session Keys: The server generates and persists a secret key for signing session cookies.
-Input Validation Framework: Uses the validator crate to enforce strict validation rules on all user-submitted data.
-HTTPS By Default: The server runs exclusively over TLS (HTTPS). It does not listen on HTTP, so a redirect is not necessary.
-Project Structure
-.
-├── .env.example    <- Example environment variables
-├── Cargo.toml
-├── certs/          <- Generate certs here
-├── session_key.bin <- Auto-generated session key
-├── src
-│   ├── config.rs
-│   ├── errors.rs
-│   └── main.rs
-├── static
-│   ├── main.js
-│   └── style.css
-└── templates
-    └── index.html.tera
+# Composable Enterprise ERP Simulation
 
+A hardened, composable enterprise web application built with Rust and the Actix Web framework. This project serves as a simulation of a secure internal tool, demonstrating features like user authentication, CSRF protection, and secure HTTP headers.
 
-.env.example: An example file for environment variables. Copy this to .env for local configuration.
-src/config.rs: A new module for loading and managing configuration from environment variables.
-static/main.js: Contains all client-side JavaScript, enabling a strict CSP.
-Getting Started
-1. Prerequisites
-Rust
-OpenSSL (or similar tool) to generate TLS certificates.
-2. Generate Self-Signed Certificates
-For local development, create a self-signed TLS certificate.
-# Create a directory for the certificates
-mkdir certs
+## ✨ Features
 
-# Generate the private key and certificate
-openssl req -x509 -newkey rsa:4096 -nodes -keyout certs/key.pem -out certs/cert.pem -days 365 -subj "/CN=localhost"
+- **Secure Authentication**: Complete login/logout flow with server-side sessions.
+- **Password Hashing**: Uses `bcrypt` for secure password storage.
+- **Route Protection**: Critical routes are only accessible to authenticated users.
+- **Security Hardening**:
+  - Cross-Site Request Forgery (CSRF) protection on all state-changing requests.
+  - Content Security Policy (CSP) with nonce to prevent XSS attacks.
+  - Secure headers like `X-Frame-Options`, `X-Content-Type-Options`, and `Strict-Transport-Security`.
+- **HTTPS by Default**: Uses self-signed certificates for local development.
+- **Configuration Management**: Settings are managed via a `.env` file.
+- **Templating**: Uses the Tera template engine for server-side rendering.
 
+## 🚀 Getting Started
 
-3. Configure Environment
-Copy the example .env file. Important: Add session_key.bin to your .gitignore file to prevent the secret key from being committed to version control.
-cp .env.example .env
-echo "session_key.bin" >> .gitignore
+Follow these instructions to get a copy of the project up and running on your local machine for development and testing purposes.
 
+### Prerequisites
 
-4. Run the Application
-Navigate to the project directory.
-Run the application:
-cargo run
-The server will start, and a session_key.bin file will be created.
-Open your web browser and go to https://127.0.0.1:8443 (or the port specified in your .env file).
-Note: Your browser will show a security warning because the certificate is self-signed. You must accept this for local development. In production, you must use a certificate from a trusted Certificate Authority (CA) like Let's Encrypt.
+- **Rust Toolchain**: Ensure you have Rust installed. If not, get it from rustup.rs.
+- **OpenSSL**: Required for generating self-signed SSL certificates.
+
+### Installation
+
+1.  **Clone the repository:**
+    ```sh
+    git clone https://github.com/ROMUSKING/erp_simfony.git
+    cd erp_simfony
+    ```
+
+2.  **Create the configuration file:**
+    Copy the example environment file to create your own local configuration.
+    ```sh
+    cp .env.example .env
+    ```
+    The default values in this file are suitable for local development.
+
+3.  **Generate Self-Signed Certificates:**
+    The application is configured to run over HTTPS. You need to generate a local certificate and private key.
+
+    ```sh
+    # Create the directory for certificates
+    mkdir certs
+
+    # Generate the key and certificate
+    openssl req -x509 -newkey rsa:4096 -keyout certs/key.pem -out certs/cert.pem -sha256 -days 365 -nodes -subj "/C=US/ST=State/L=City/O=Organization/OU=OrgUnit/CN=localhost"
+    ```
+    > **Note**: The `.gitignore` file is configured to prevent `key.pem` from being committed to the repository.
+
+4.  **Build and run the application:**
+    ```sh
+    cargo run --release
+    ```
+
+##  usage Usage
+
+Once the application is running, you can access it in your browser:
+
+- **URL**: https://localhost:8443
+  - You will likely see a browser warning because the certificate is self-signed. You can safely proceed.
+
+- **Default Credentials**:
+  - **Username**: `admin`
+  - **Password**: `password123`
+
+## 📂 Project Structure
+
+```
+erp_simfony/
+├── certs/              # Stores SSL certificates (ignored by Git)
+├── src/                # Source code
+│   ├── auth.rs         # User authentication logic
+│   ├── config.rs       # Configuration loading
+│   ├── errors.rs       # Custom error handling
+│   └── main.rs         # Application entrypoint, routes, and handlers
+├── static/             # Static assets (CSS, JS, images)
+├── templates/          # Tera HTML templates
+├── .env.example        # Example environment configuration
+├── .gitignore          # Specifies files for Git to ignore
+├── Cargo.toml          # Project dependencies and metadata
+└── README.md           # This file
+```
