@@ -1,0 +1,14 @@
+# Rust build artifacts
+/target/
+
+# Crate registry
+.cargo/
+
+# IDE-specific files
+.idea/
+.vscode/
+
+# Secrets and environment variables
+.env
+session_key.bin
+certs/key.pem

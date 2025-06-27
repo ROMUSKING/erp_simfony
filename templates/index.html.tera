@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- HTMX library -->
+    <!-- AUDIT FIX: Added nonce for strict CSP -->
+    <script src="https://unpkg.com/htmx.org@1.9.10" integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5xLSi8nO7UC" crossorigin="anonymous" nonce="{{ csp_nonce }}"></script>
+    <!-- Local script for configuration -->
+    <!-- AUDIT FIX: Added nonce for strict CSP -->
+    <script src="/static/main.js" defer nonce="{{ csp_nonce }}"></script>
+</head>
+<body>
+    <header>
+        <h1>Welcome to the {{ title }}</h1>
+        <p>A production-hardened demonstration of Rust and HTMX.</p>
+    </header>
+
+    <main>
+        <div class="container">
+            <h2>Demonstrating Hardened Security</h2>
+            <p>
+                Submit the form below. The request includes a CSRF token and the server validates the input
+                to ensure it is not empty and within length limits.
+            </p>
+            <form hx-post="/data" hx-target="#content-target" hx-swap="innerHTML">
+                <input
+                    type="text"
+                    name="user_input"
+                    class="input-field"
+                    placeholder="Enter some text..."
+                >
+                <button type="submit" class="button">Submit Securely</button>
+            </form>
+
+            <div id="content-target" class="content-box">
+                <!-- This is where the content from the server will be placed -->
+                <p>Results from the server will appear here.</p>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        <p>© 2025 Composable Systems Inc.</p>
+    </footer>
+</body>
+</html>
