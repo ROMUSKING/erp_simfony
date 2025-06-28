@@ -1,5 +1,5 @@
 use crate::errors::AppError;
-use actix_session::Session;
+use actix_session::{Session, SessionExt};
 use actix_web::{
     dev::Payload, guard, web, FromRequest, HttpRequest, HttpResponse, Responder,
 };

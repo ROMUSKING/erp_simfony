@@ -10,7 +10,7 @@ mod security;
 
 use actix_csrf::CsrfMiddleware;
 use actix_files::Files;
-use actix_governor::{Governor, GovernorConfigBuilder, Quota};
+use actix_governor::{Governor, GovernorConfigBuilder};
 use actix_session::{config::PersistentSession, storage::CookieSessionStore, SessionMiddleware};
 use actix_web::{
     cookie::{Key, SameSite},
@@ -21,7 +21,6 @@ use rustls::ServerConfig;
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use std::fs::File;
 use std::io::BufReader;
-use std::num::NonZeroU32;
 use tera::Tera;
 use time::Duration;
 use tracing::info;
@@ -77,8 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. Configure rate limiting with `actix-governor`
     // AUDIT FIX: Use values from config instead of hardcoding, per blueprint.
-    let rate_limit_per_second = NonZeroU32::new(config.rate_limit_per_second as u32)
-        .ok_or("RATE_LIMIT_PER_SECOND must be non-zero")?;
+   
     let governor_conf = GovernorConfigBuilder::default()
         .quota(Quota::per_second(rate_limit_per_second))
         .burst_size(config.rate_limit_burst_size)

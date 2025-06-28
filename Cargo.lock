@@ -59,6 +59,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "actix-csrf"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a090daa2a8b7aaaaf585f6a0dd0fbee92ea81728c01cc45ae7643d13e51dd4f"
+dependencies = [
+ "actix-web",
+ "base64 0.13.1",
+ "cookie",
+ "rand 0.8.5",
+ "serde",
+ "tracing",
+]
+
+[[package]]
 name = "actix-files"
 version = "0.6.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -532,6 +546,12 @@ dependencies = [
 
 [[package]]
 name = "base64"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e1b586273c5702936fe7b7d6896644d8be71e6314cfe09d3167c95f712589e8"
+
+[[package]]
+name = "base64"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ea22880d78093b0cbe17c89f64a7d457941e65759157ec6cb31a31d652b05e5"
@@ -865,32 +885,6 @@ name = "colorchoice"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
-
-[[package]]
-name = "composable-enterprise-final"
-version = "0.5.0"
-dependencies = [
- "actix-files",
- "actix-governor",
- "actix-session",
- "actix-web",
- "cargo-audit",
- "chrono",
- "dotenvy",
- "html-escape",
- "rand 0.8.5",
- "rustls 0.23.28",
- "rustls-pemfile 2.2.0",
- "serde",
- "serde_json",
- "tera",
- "time",
- "tracing",
- "tracing-actix-web",
- "tracing-subscriber",
- "uuid",
- "validator",
-]
 
 [[package]]
 name = "convert_case"
@@ -3861,6 +3855,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9203b8055f63a2a00e2f593bb0510367fe707d7ff1e5c872de2f537b339e5410"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "simfony"
+version = "0.5.0"
+dependencies = [
+ "actix-csrf",
+ "actix-files",
+ "actix-governor",
+ "actix-session",
+ "actix-web",
+ "base64 0.22.1",
+ "cargo-audit",
+ "chrono",
+ "dotenvy",
+ "futures-util",
+ "html-escape",
+ "rand 0.8.5",
+ "rustls 0.23.28",
+ "rustls-pemfile 2.2.0",
+ "serde",
+ "serde_json",
+ "tera",
+ "time",
+ "tracing",
+ "tracing-actix-web",
+ "tracing-subscriber",
+ "uuid",
+ "validator",
 ]
 
 [[package]]

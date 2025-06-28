@@ -17,6 +17,9 @@ time = { version = "0.3.36", features = ["serde"] }
 # Security & Config Dependencies
 actix-session = { version = "0.9.0", features = ["cookie-session"] }
 rustls = "0.23.5"
+actix-csrf = "0.6.0"
+base64 = "0.22.1"
+futures-util = "0.3.30"
 rustls-pemfile = "2.1.2"
 actix-governor = "0.6.0"
 rand = "0.8.5"
