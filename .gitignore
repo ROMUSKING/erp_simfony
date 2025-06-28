@@ -4,7 +4,7 @@
 
 # Local crate registry
 .cargo/
-
+Cargo.lock
 # In general, it's not a good idea to commit editor-specific files,
 # these are the editor extensions for VSCode, Vim, and JetBrains IDEs
 .vscode/
