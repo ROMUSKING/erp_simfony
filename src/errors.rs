@@ -1,4 +1,4 @@
-use actix_web::{http::StatusCode, ResponseError, HttpResponse};
+use actix_web::{http::StatusCode, HttpResponse, ResponseError};
 use serde_json::json;
 use std::fmt;
 
@@ -57,8 +57,29 @@ impl ResponseError for AppError {
     }
 }
 
-impl From<tera::Error> for AppError { fn from(err: tera::Error) -> Self { AppError::TeraError(err) } }
-impl From<std::io::Error> for AppError { fn from(err: std::io::Error) -> Self { AppError::IoError(err) } }
-impl From<actix_session::SessionInsertError> for AppError { fn from(err: actix_session::SessionInsertError) -> Self { AppError::SessionError(err.to_string()) } }
-impl From<actix_session::SessionGetError> for AppError { fn from(err: actix_session::SessionGetError) -> Self { AppError::SessionError(err.to_string()) } }
-impl From<validator::ValidationErrors> for AppError { fn from(err: validator::ValidationErrors) -> Self { AppError::ValidationError(err.to_string()) } }
+impl std::error::Error for AppError {}
+impl From<tera::Error> for AppError {
+    fn from(err: tera::Error) -> Self {
+        AppError::TeraError(err)
+    }
+}
+impl From<std::io::Error> for AppError {
+    fn from(err: std::io::Error) -> Self {
+        AppError::IoError(err)
+    }
+}
+impl From<actix_session::SessionInsertError> for AppError {
+    fn from(err: actix_session::SessionInsertError) -> Self {
+        AppError::SessionError(err.to_string())
+    }
+}
+impl From<actix_session::SessionGetError> for AppError {
+    fn from(err: actix_session::SessionGetError) -> Self {
+        AppError::SessionError(err.to_string())
+    }
+}
+impl From<validator::ValidationErrors> for AppError {
+    fn from(err: validator::ValidationErrors) -> Self {
+        AppError::ValidationError(err.to_string())
+    }
+}

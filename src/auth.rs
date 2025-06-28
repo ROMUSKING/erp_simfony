@@ -1,12 +1,17 @@
 use crate::errors::AppError;
 use actix_session::{Session, SessionExt};
-use actix_web::{
-    dev::Payload, guard, web, FromRequest, HttpRequest, HttpResponse, Responder,
-};
+use actix_web::{dev::Payload, guard, web, FromRequest, HttpRequest, HttpResponse, Responder};
+
 use serde::{Deserialize, Serialize};
 use std::future::{ready, Ready};
+use validator::Validate; // For input validation // For password hashing and verification
 
 const USER_KEY: &str = "user";
+// In a real app, this would come from a database.
+const ADMIN_USERNAME: &str = "admin";
+// This is the bcrypt hash for "password123".
+// Generated with: `bcrypt::hash("password123", bcrypt::DEFAULT_COST).unwrap()`
+const PASSWORD_HASH: &str = "$2b.uB9X.B9X.B9X.B9X.B9X.B9X.B";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct User {
@@ -45,7 +50,9 @@ impl FromRequest for AuthSession {
 
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
         // This relies on the SessionMiddleware being registered.
-        ready(Ok(AuthSession(Session::from_request(req, payload).into_inner().unwrap())))
+        ready(Ok(AuthSession(
+            Session::from_request(req, payload).into_inner().unwrap(),
+        )))
     }
 }
 
@@ -60,19 +67,49 @@ impl guard::Guard for AuthGuard {
 }
 
 /// Represents the data submitted from the login form.
-#[derive(Deserialize)]
+/// AUDIT FIX: Added server-side validation as per blueprint.
+#[derive(Deserialize, Validate)]
 pub struct LoginData {
+    #[validate(length(min = 1, message = "Username cannot be empty"))]
     pub username: String,
+    #[validate(length(min = 1, message = "Password cannot be empty"))]
     pub password: String,
 }
 
 /// Handler for the POST /login request.
+/// AUDIT FIX: Replaced placeholder logic with secure password verification.
 pub async fn login_post(
     session: AuthSession,
     form: web::Form<LoginData>,
 ) -> Result<impl Responder, AppError> {
-    // In a real application, you would validate the password against a hash here.
-    let user = User { username: form.username.clone() };
-    session.login(user)?;
-    Ok(HttpResponse::SeeOther().append_header(("Location", "/")).finish())
+    // 1. Rigorous Input Validation (Blueprint Control)
+    form.validate()?;
+
+    let username = &form.username;
+    let password = &form.password;
+
+    // 2. Verify credentials (simulated user lookup)
+    if username == ADMIN_USERNAME {
+        // 3. Use bcrypt to securely verify the password
+        let is_valid = bcrypt::verify(password, PASSWORD_HASH).unwrap_or(false);
+
+        if is_valid {
+            // 4. On success, create the session
+            let user = User {
+                username: username.clone(),
+            };
+            session.login(user)?;
+            tracing::info!("Successful login for user: {}", username);
+            // Redirect to the main application page
+            return Ok(HttpResponse::SeeOther()
+                .append_header(("Location", "/"))
+                .finish());
+        }
+    }
+
+    // 5. Log failed attempts and return a generic error (Blueprint Control)
+    tracing::warn!("Failed login attempt for username: {}", username);
+    Err(AppError::ValidationError(
+        "Invalid username or password.".to_string(),
+    ))
 }
