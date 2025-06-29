@@ -59,7 +59,7 @@ where
         Box::pin(async move {
             let mut res = fut.await?;
             // AUDIT FIX: Implement a strict, nonce-based CSP as per blueprint.
-            let csp = format!("default-src 'self'; script-src 'self' 'nonce-{}'; object-src 'none'; base-uri 'self'; form-action 'self';", nonce);
+            let csp = format!("default-src 'self'; script-src 'self' 'nonce-{nonce}'; object-src 'none'; base-uri 'self'; form-action 'self';");
 
             res.headers_mut().insert(
                 header::CONTENT_SECURITY_POLICY,

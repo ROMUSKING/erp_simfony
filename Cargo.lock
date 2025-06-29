@@ -1307,6 +1307,7 @@ dependencies = [
  "actix-csrf",
  "actix-files",
  "actix-governor",
+ "actix-http",
  "actix-rt",
  "actix-session",
  "actix-web",

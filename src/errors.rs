@@ -73,11 +73,12 @@ impl ResponseError for AppError {
                     .field_errors()
                     .iter()
                     .map(|(field, errs)| {
-                        let msg = errs.get(0)
+                        let msg = errs
+                            .first()
                             .and_then(|e| e.message.as_ref())
                             .map(|m| m.to_string())
                             .unwrap_or_else(|| "is invalid".to_string());
-                        format!("{}: {}", field, msg)
+                        format!("{field}: {msg}")
                     })
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -136,17 +137,25 @@ mod tests {
     #[test]
     fn test_display_impl() {
         assert!(AppError::IoError.to_string().contains("IO Error"));
-        assert!(AppError::InternalError.to_string().contains("Internal Server Error"));
+        assert!(AppError::InternalError
+            .to_string()
+            .contains("Internal Server Error"));
 
-        let invalid_input = TestInput { field: "".to_string() };
+        let invalid_input = TestInput {
+            field: "".to_string(),
+        };
         let validation_errors = invalid_input.validate().unwrap_err();
-        assert!(AppError::ValidationError(validation_errors).to_string().contains("Validation Error"));
+        assert!(AppError::ValidationError(validation_errors)
+            .to_string()
+            .contains("Validation Error"));
     }
 
     #[actix_rt::test]
     async fn test_response_error_impl() {
         // Test Validation Error
-        let invalid_input = TestInput { field: "".to_string() };
+        let invalid_input = TestInput {
+            field: "".to_string(),
+        };
         let validation_errors = invalid_input.validate().unwrap_err();
         let app_error = AppError::from(validation_errors);
         assert_eq!(app_error.status_code(), StatusCode::BAD_REQUEST);
@@ -161,21 +170,32 @@ mod tests {
         let response = unauthorized_error.error_response();
         let body_bytes = body::to_bytes(response.into_body()).await.unwrap();
         let body_json: Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(body_json["error"]["message"], "Authentication required. Please log in.");
+        assert_eq!(
+            body_json["error"]["message"],
+            "Authentication required. Please log in."
+        );
 
         // Test Generic Internal Server Error
         let internal_error = AppError::InternalError;
-        assert_eq!(internal_error.status_code(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            internal_error.status_code(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
         let response = internal_error.error_response();
         let body_bytes = body::to_bytes(response.into_body()).await.unwrap();
         let body_json: Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(body_json["error"]["message"], "An unexpected error occurred. Please try again later.");
+        assert_eq!(
+            body_json["error"]["message"],
+            "An unexpected error occurred. Please try again later."
+        );
     }
 
     #[test]
     fn test_from_impls() {
         // Test From<ValidationErrors>
-        let invalid_input = TestInput { field: "".to_string() };
+        let invalid_input = TestInput {
+            field: "".to_string(),
+        };
         let validation_errors = invalid_input.validate().unwrap_err();
         let app_error: AppError = validation_errors.into();
         assert!(matches!(app_error, AppError::ValidationError(_)));

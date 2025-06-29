@@ -14,7 +14,7 @@ use actix_governor::{Governor, GovernorConfigBuilder};
 use actix_session::{config::PersistentSession, storage::CookieSessionStore, SessionMiddleware};
 use actix_web::{
     cookie::{Key, SameSite},
-    dev, web, App, HttpMessage, HttpRequest, HttpResponse, HttpServer, Responder,
+    web, App, HttpMessage, HttpRequest, HttpResponse, HttpServer, Responder,
 };
 use rand::rngs::StdRng;
 use rustls::{pki_types::PrivateKeyDer, ServerConfig};
@@ -158,7 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .build();
 
         App::new()
-            .wrap(TracingLogger::default()) // TracingLogger must be wrapped on the App, not HttpServer
+            .wrap(TracingLogger::default()) // TracingLogger must be wrapped on the App,
             .app_data(web::Data::new(app_config.clone()))
             .app_data(web::Data::new(tera.clone()))
             // Middlewares are wrapped in reverse order of execution:
@@ -197,4 +197,240 @@ fn load_rustls_config() -> Result<ServerConfig, Box<dyn std::error::Error>> {
     let private_key = PrivateKeyDer::Pkcs8(keys.remove(0).into());
 
     Ok(config_builder.with_single_cert(cert_chain, private_key)?)
+}
+
+#[cfg(test)]
+mod tests {
+    // Ensure the `tests` module is only included during testing
+    use super::*;
+    use actix_http::Request;
+    use actix_web::{
+        body::{BoxBody, EitherBody},
+        dev::{Service, ServiceResponse},
+        http::{header, StatusCode},
+        test,
+    };
+    use scraper::{Html, Selector};
+    use serde_json::Value; // Import Value for JSON parsing in tests
+    use std::str;
+
+    /// Helper to build the application for testing.
+    /// It mirrors the main application setup but disables `cookie_secure` for non-TLS test environments.
+    async fn setup_test_app(
+    ) -> impl Service<Request, Response = ServiceResponse<EitherBody<BoxBody>>, Error = actix_web::Error>
+    {
+        let config = Config::from_env().expect("Failed to load test config");
+        let tera = Tera::new("templates/**/*").expect("Failed to init Tera");
+        let session_key = Key::from(config.hmac_secret.as_bytes());
+        let governor_conf = GovernorConfigBuilder::default()
+            .seconds_per_request(config.rate_limit_per_second)
+            .burst_size(config.rate_limit_burst_size)
+            .finish()
+            .unwrap();
+
+        let session_middleware =
+            SessionMiddleware::builder(CookieSessionStore::default(), session_key.clone())
+                .cookie_name("erp-session".to_string())
+                // In tests, we don't use TLS, so `cookie_secure` must be false.
+                .cookie_secure(false)
+                .cookie_http_only(true)
+                .cookie_same_site(SameSite::Strict)
+                .session_lifecycle(
+                    PersistentSession::default()
+                        .session_ttl(Duration::seconds(config.session_max_age_seconds as i64)),
+                )
+                .build();
+
+        test::init_service(
+            App::new()
+                .app_data(web::Data::new(config.clone()))
+                .app_data(web::Data::new(tera.clone()))
+                .wrap(Governor::new(&governor_conf))
+                .wrap(SecurityHeaders)
+                .wrap(session_middleware)
+                .configure(configure_app),
+        )
+        .await
+    }
+
+    /// Helper to extract CSRF token from an HTML body using a proper parser.
+    /// This is more robust than string splitting and resilient to template changes.
+    fn extract_csrf_token(body: &str) -> String {
+        let document = Html::parse_document(body);
+        let selector = Selector::parse("input[name=\"csrf_token\"]").unwrap();
+        document
+            .select(&selector)
+            .next()
+            .and_then(|input| input.value().attr("value"))
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    #[actix_web::test]
+    async fn test_unauthenticated_access_is_denied() {
+        // Arrange
+        let app = setup_test_app().await;
+        let req = test::TestRequest::get().uri("/").to_request();
+
+        // Act
+        let resp = test::call_service(&app, req).await;
+
+        // Assert: Should redirect to login (unauthenticated)
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/login");
+    }
+
+    #[actix_web::test]
+    async fn test_login_page_loads_with_headers_and_csrf() {
+        // Arrange
+        let app = setup_test_app().await;
+
+        // --- Step 1: Visit login page to get session and CSRF cookies/token ---
+        let req = test::TestRequest::get().uri("/login").to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Assert that critical security headers are present
+        assert!(resp.headers().contains_key(header::CONTENT_SECURITY_POLICY));
+        assert_eq!(resp.headers().get("x-frame-options").unwrap(), "DENY");
+
+        // Split the response to handle body and cookies separately, avoiding borrow issues.
+        let (_req, resp_head) = resp.into_parts();
+        // We must collect the cookies to release the borrow on `resp_head` before getting the body.
+        let cookies: Vec<_> = resp_head.cookies().map(|c| c.into_owned()).collect();
+        let body = actix_web::body::to_bytes(resp_head.into_body())
+            .await
+            .unwrap();
+
+        // Extract cookies and the HTML CSRF token for the next request
+        let session_cookie = cookies
+            .iter()
+            .find(|c| c.name() == "erp-session")
+            .expect("Session cookie not found")
+            .clone();
+        let csrf_cookie = cookies
+            .iter()
+            .find(|c| c.name() == "csrf-token")
+            .expect("CSRF cookie not found")
+            .clone();
+        let csrf_token_from_html = extract_csrf_token(str::from_utf8(&body).unwrap());
+        assert!(
+            !csrf_token_from_html.is_empty(),
+            "CSRF token should be present in the login form"
+        );
+
+        // --- Step 2: Submit login form with valid credentials and CSRF token ---
+        let login_form =
+            format!("username=admin&password=password123&csrf_token={csrf_token_from_html}");
+        let req = test::TestRequest::post()
+            .uri("/login")
+            .cookie(session_cookie.clone())
+            .cookie(csrf_cookie.clone())
+            .insert_header((header::CONTENT_TYPE, "application/x-www-form-urlencoded"))
+            .set_payload(login_form)
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        // Assert successful login (redirect to dashboard)
+        assert_eq!(
+            resp.status(),
+            StatusCode::SEE_OTHER,
+            "Successful login should redirect"
+        );
+        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/");
+        let auth_cookie = resp
+            .response()
+            .cookies()
+            .find(|c| c.name() == "erp-session")
+            .expect("Auth cookie not found")
+            .clone();
+
+        // --- Step 3: Access a protected route with the new authenticated session cookie ---
+        let req = test::TestRequest::get()
+            .uri("/")
+            .cookie(auth_cookie.clone())
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "Authenticated access should succeed"
+        );
+
+        // --- Step 4: Logout ---
+        let req = test::TestRequest::post()
+            .uri("/logout")
+            .cookie(auth_cookie.clone())
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        // Assert successful logout (redirect to login)
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/login");
+
+        // Assert that the session cookie was cleared
+        let logout_cookie = resp
+            .response()
+            .cookies()
+            .find(|c| c.name() == "erp-session")
+            .unwrap();
+        assert_eq!(
+            logout_cookie.max_age().unwrap().whole_seconds(),
+            0,
+            "Session cookie should be cleared on logout"
+        );
+
+        // --- Step 5: Attempt login with invalid CSRF token ---
+        let login_form = "username=admin&password=password123&csrf_token=invalidtoken";
+        let req = test::TestRequest::post()
+            .uri("/login")
+            .insert_header((header::CONTENT_TYPE, "application/x-www-form-urlencoded"))
+            .set_payload(login_form)
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // --- Step 6: Attempt login with bad password ---
+        let req = test::TestRequest::get().uri("/login").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        // Split the response to handle body and cookies separately, avoiding borrow issues.
+        let (_req, resp_head) = resp.into_parts();
+        let cookies: Vec<_> = resp_head.cookies().map(|c| c.into_owned()).collect();
+        let body = actix_web::body::to_bytes(resp_head.into_body())
+            .await
+            .unwrap();
+
+        let session_cookie = cookies
+            .iter()
+            .find(|c| c.name() == "erp-session")
+            .unwrap()
+            .clone();
+        let csrf_cookie = cookies
+            .iter()
+            .find(|c| c.name() == "csrf-token")
+            .unwrap()
+            .clone();
+        let csrf_token_from_html = extract_csrf_token(str::from_utf8(&body).unwrap());
+
+        let login_form =
+            format!("username=admin&password=wrongpassword&csrf_token={csrf_token_from_html}");
+        let req = test::TestRequest::post()
+            .uri("/login")
+            .cookie(session_cookie)
+            .cookie(csrf_cookie)
+            .insert_header((header::CONTENT_TYPE, "application/x-www-form-urlencoded"))
+            .set_payload(login_form)
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        // Assert: The request is rejected with a specific error message
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = test::read_body(resp).await;
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json["error"]["message"],
+            "credentials: Invalid username or password."
+        );
+    }
 }
