@@ -1,10 +1,9 @@
 use crate::errors::AppError;
 use actix_session::{Session, SessionExt};
 use actix_web::{dev::Payload, guard, web, FromRequest, HttpRequest, HttpResponse, Responder};
-
 use serde::{Deserialize, Serialize};
 use std::future::{ready, Ready};
-use validator::Validate; // For input validation // For password hashing and verification
+use validator::{Validate, ValidationError, ValidationErrors}; // For input validation // For password hashing and verification
 
 const USER_KEY: &str = "user";
 // In a real app, this would come from a database.
@@ -109,7 +108,9 @@ pub async fn login_post(
 
     // 5. Log failed attempts and return a generic error (Blueprint Control)
     tracing::warn!("Failed login attempt for username: {}", username);
-    Err(AppError::ValidationError(
-        "Invalid username or password.".to_string(),
-    ))
+    let mut errors = ValidationErrors::new();
+    let mut error = ValidationError::new("credentials");
+    error.message = Some("Invalid username or password.".into());
+    errors.add("credentials", error);
+    Err(AppError::ValidationError(errors))
 }

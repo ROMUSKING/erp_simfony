@@ -53,7 +53,7 @@ Follow these instructions to get a copy of the project up and running on your lo
 
 4.  **Build and run the application:**
     ```sh
-    cargo run --release
+    cargo run --release --bin simfony
     ```
 
 ##  usage Usage
