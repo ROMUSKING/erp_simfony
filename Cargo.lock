@@ -1301,6 +1301,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
+name = "erp_simfony"
+version = "0.5.0"
+dependencies = [
+ "actix-csrf",
+ "actix-files",
+ "actix-governor",
+ "actix-rt",
+ "actix-session",
+ "actix-web",
+ "base64 0.22.1",
+ "bcrypt",
+ "cargo-audit",
+ "chrono",
+ "dotenvy",
+ "futures-util",
+ "html-escape",
+ "rand 0.8.5",
+ "rustls",
+ "rustls-pemfile",
+ "scraper",
+ "serde",
+ "serde_json",
+ "tera",
+ "time",
+ "tracing",
+ "tracing-actix-web",
+ "tracing-subscriber",
+ "uuid",
+ "validator",
+]
+
+[[package]]
 name = "errno"
 version = "0.3.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4321,38 +4353,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9203b8055f63a2a00e2f593bb0510367fe707d7ff1e5c872de2f537b339e5410"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "simfony"
-version = "0.5.0"
-dependencies = [
- "actix-csrf",
- "actix-files",
- "actix-governor",
- "actix-rt",
- "actix-session",
- "actix-web",
- "base64 0.22.1",
- "bcrypt",
- "cargo-audit",
- "chrono",
- "dotenvy",
- "futures-util",
- "html-escape",
- "rand 0.8.5",
- "rustls",
- "rustls-pemfile",
- "scraper",
- "serde",
- "serde_json",
- "tera",
- "time",
- "tracing",
- "tracing-actix-web",
- "tracing-subscriber",
- "uuid",
- "validator",
 ]
 
 [[package]]
