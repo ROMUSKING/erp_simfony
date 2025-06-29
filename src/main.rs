@@ -82,7 +82,12 @@ async fn login_get(
     let mut context = tera::Context::new();
     context.insert("error", "");
     // Touch the session to ensure a session cookie is always set
-    let _ = session.insert("touch", Uuid::new_v4().to_string());
+    // Write a dummy value to the session to force cookie creation
+    let insert_result = session.insert("touch", Uuid::new_v4().to_string());
+    session.renew();
+    println!("[DEBUG] session.insert result: {:?}", insert_result);
+    let touch_val: Option<String> = session.get("touch").unwrap_or(None);
+    println!("[DEBUG] session.get('touch'): {:?}", touch_val);
     // Pass the CSP nonce to the template
     let nonce = req
         .extensions()
@@ -141,66 +146,91 @@ fn configure_app(cfg: &mut web::ServiceConfig) {
 
 #[actix_web::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("[DEBUG] Entered main()");
     dotenvy::dotenv().ok();
+    println!("[DEBUG] Loaded .env");
     // 1. Setup modern logging with `tracing`
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
+    println!("[DEBUG] Tracing/logging initialized");
 
     // 2. Load configuration from .env file
+    println!("[DEBUG] About to call Config::from_env()");
     let config = Config::from_env()?;
-
+    println!(
+        "[DEBUG] Config loaded: host={}, port={}",
+        config.host, config.port
+    );
     // 3. Load TLS configuration, returning an error on failure instead of panicking.
+    println!("[DEBUG] About to call load_rustls_config()");
     let tls_config = load_rustls_config()?;
-
+    println!("[DEBUG] TLS config loaded");
     // 4. Configure rate limiting with `actix-governor`
-
     let governor_conf = GovernorConfigBuilder::default()
         .seconds_per_request(config.rate_limit_per_second)
         .burst_size(config.rate_limit_burst_size)
         .finish()
-        .ok_or("Failed to build governor config")?;
-
-    // 5. Initialize template engine, returning an error on failure.
+        .ok_or_else(|| Box::<dyn std::error::Error>::from("Failed to build governor config"))?;
+    // 5. Initialize template engine, returning an error
     let tera = Tera::new("templates/**/*")?;
-
     // 6. Create the session key from the secret in config.
-    let secret_bytes = hex::decode(&config.hmac_secret)
-        .map_err(|e| format!("Failed to decode HMAC_SECRET as hex: {}", e))?;
-    println!("[MAIN] HMAC_SECRET (hex): {}", &config.hmac_secret);
-    println!("[MAIN] Decoded secret_bytes len: {}", secret_bytes.len());
-    let session_key = Key::from(
-        &<[u8; 32]>::try_from(secret_bytes.as_slice())
-            .expect("HMAC_SECRET must be 32 bytes (64 hex chars)"),
-    );
+    println!("[DEBUG] About to decode HMAC_SECRET");
+    let secret_bytes = match hex::decode(&config.hmac_secret) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            println!("[ERROR] Failed to decode HMAC_SECRET as hex: {e}");
+            return Err(e.into());
+        }
+    };
+    println!("[DEBUG] Decoded HMAC_SECRET, len: {}", secret_bytes.len());
+    println!("[DEBUG] About to create session key");
+    let session_key = match <[u8; 64]>::try_from(secret_bytes.as_slice()) {
+        Ok(arr) => Key::from(&arr),
+        Err(e) => {
+            println!("[ERROR] HMAC_SECRET must be 64 bytes (128 hex chars): {e}");
+            return Err(e.into());
+        }
+    };
+    println!("[DEBUG] Session key created");
+    let session_key_data = web::Data::new(session_key);
+    println!("[DEBUG] Session key wrapped in web::Data");
 
     // AUDIT FIX: Provide a random number generator (RNG) for CSRF middleware.
-    // The `CsrfMiddleware` requires a source of randomness to generate secure
-    // tokens. We create one `StdRng` instance from entropy and clone it for
-    // each worker thread. This is both efficient and secure.
     let rng = StdRng::from_entropy();
+    println!("[DEBUG] RNG initialized");
 
     let app_config = config.clone();
     info!("Starting server at https://{}:{}", config.host, config.port);
+    println!("[DEBUG] About to start HttpServer::new");
 
     HttpServer::new(move || {
-        // The `move` closure captures the cloned `app_config`.
-        let session_middleware =
-            SessionMiddleware::builder(CookieSessionStore::default(), session_key.clone())
-                .cookie_name("erp-session".to_string())
-                .cookie_secure(true)
-                .cookie_http_only(true)
-                .cookie_same_site(SameSite::Strict)
-                .session_lifecycle(
-                    PersistentSession::default()
-                        .session_ttl(Duration::seconds(config.session_max_age_seconds as i64)),
-                )
-                .build();
+        println!("[DEBUG] Inside HttpServer::new closure");
+        println!(
+            "[DEBUG] session_key_data ptr: {:p}, inner key ptr: {:p}",
+            &session_key_data,
+            session_key_data.get_ref()
+        );
+        // The `move` closure captures the cloned `app_config` and `tera`.
+        let session_middleware = SessionMiddleware::builder(
+            CookieSessionStore::default(),
+            session_key_data.get_ref().clone(),
+        )
+        .cookie_name("erp-session".to_string())
+        .cookie_secure(true)
+        .cookie_http_only(true)
+        .cookie_same_site(SameSite::Strict)
+        .session_lifecycle(
+            PersistentSession::default()
+                .session_ttl(Duration::seconds(config.session_max_age_seconds as i64)),
+        )
+        .build();
 
         App::new()
             .app_data(web::Data::new(rng.clone()))
             .app_data(web::Data::new(app_config.clone()))
             .app_data(web::Data::new(tera.clone()))
+            .app_data(session_key_data.clone())
             .wrap(session_middleware)
             .wrap(
                 CsrfMiddleware::<StdRng>::new().set_cookie(actix_web::http::Method::GET, "/login"),
@@ -222,23 +252,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// This function now returns a `Result` to avoid panicking on I/O or parsing errors.
 fn load_rustls_config() -> Result<ServerConfig, Box<dyn std::error::Error>> {
     let config_builder = ServerConfig::builder().with_no_client_auth();
-
     let cert_file = &mut BufReader::new(File::open("certs/cert.pem")?);
     let key_file = &mut BufReader::new(File::open("certs/key.pem")?);
-
     let cert_chain = certs(cert_file)?
         .into_iter()
         .map(rustls::pki_types::CertificateDer::from)
-        .collect();
-
+        .collect::<Vec<_>>();
     let mut keys = pkcs8_private_keys(key_file)?;
     if keys.is_empty() {
         return Err("Could not locate PKCS8 private keys in key.pem.".into());
     }
-
     let private_key = PrivateKeyDer::Pkcs8(keys.remove(0).into());
-
-    Ok(config_builder.with_single_cert(cert_chain, private_key)?)
+    let config = config_builder.with_single_cert(cert_chain, private_key)?;
+    Ok(config)
 }
 
 #[cfg(test)]
@@ -266,7 +292,7 @@ mod test_helpers {
         }
         HttpResponse::Ok().content_type("text/plain").body(s)
     }
-}
+} // End of test_helpers module
 
 #[cfg(test)]
 mod tests {
@@ -283,6 +309,7 @@ mod tests {
     use dotenvy::dotenv;
     use scraper::{Html, Selector};
     use serde_json::Value;
+    use std::process::Command;
     use std::str;
 
     /// Helper to build the application for testing.
@@ -290,20 +317,12 @@ mod tests {
     async fn setup_test_app(
     ) -> impl Service<Request, Response = ServiceResponse<EitherBody<BoxBody>>, Error = actix_web::Error>
     {
-        // For tests, we must ensure environment variables are loaded.
-        // If `HMAC_SECRET` is not found in the environment (e.g., in CI),
-        // we set
-        // we set a default value to ensure tests can run without a `.env`
-        // file. This is safe because it only affects the test environment.
-        dotenv().ok();
-        if std::env::var("HMAC_SECRET").is_err() {
-            // The HMAC secret for tests must be at least 64 bytes long for `cookie::Key`.
-            // We provide a sufficiently long, static key for reproducible test runs.
-            std::env::set_var(
-                "HMAC_SECRET",
-                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            );
-        }
+        // Always set a known-good test HMAC_SECRET before loading dotenv.
+        const TEST_SECRET: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        std::env::set_var("HMAC_SECRET", TEST_SECRET);
+        // Prefer .env.test for test secrets, fallback to .env if not present.
+        dotenvy::from_filename(".env.test").ok();
+        dotenvy::dotenv().ok();
         let config = Config::from_env().expect("Failed to load test config");
         let tera = Tera::new("templates/**/*").expect("Failed to init Tera");
         let secret_bytes =
@@ -311,8 +330,8 @@ mod tests {
         println!("[TEST] HMAC_SECRET (hex): {}", &config.hmac_secret);
         println!("[TEST] Decoded secret_bytes len: {}", secret_bytes.len());
         let session_key = Key::from(
-            &<[u8; 32]>::try_from(secret_bytes.as_slice())
-                .expect("HMAC_SECRET must decode to exactly 32 bytes (64 hex chars)"),
+            &<[u8; 64]>::try_from(secret_bytes.as_slice())
+                .expect("HMAC_SECRET must decode to exactly 64 bytes (128 hex chars)"),
         );
 
         // AUDIT FIX: Provide a random number generator (RNG) for CSRF middleware in tests.
@@ -358,24 +377,17 @@ mod tests {
         .await
     }
 
-    /// Helper to build the application for testing with cookie dumping.
+    /// Helper to build the application for
     /// This is used to isolate and test CSRF middleware behavior.
     async fn setup_test_app_with_dump(
     ) -> impl Service<Request, Response = ServiceResponse<EitherBody<BoxBody>>, Error = actix_web::Error>
     {
-        // For tests, we must ensure environment variables are loaded.
-        // If `HMAC_SECRET` is not found in the environment (e.g., in CI),
-        // we set a default value to ensure tests can run without a `.env`
-        // file. This is safe because it only affects the test environment.
-        dotenv().ok();
-        if std::env::var("HMAC_SECRET").is_err() {
-            // The HMAC secret for tests must be at least 64 bytes long for `cookie::Key`.
-            // We provide a sufficiently long, static key for reproducible test runs.
-            std::env::set_var(
-                "HMAC_SECRET",
-                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            );
-        }
+        // Always set a known-good test HMAC_SECRET before loading dotenv.
+        const TEST_SECRET: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        std::env::set_var("HMAC_SECRET", TEST_SECRET);
+        // Prefer .env.test for test secrets, fallback to .env if not present.
+        dotenvy::from_filename(".env.test").ok();
+        dotenvy::dotenv().ok();
         let config = Config::from_env().expect("Failed to load test config");
         let tera = Tera::new("templates/**/*").expect("Failed to init Tera");
         let secret_bytes =
@@ -383,8 +395,8 @@ mod tests {
         println!("[TEST] HMAC_SECRET (hex): {}", &config.hmac_secret);
         println!("[TEST] Decoded secret_bytes len: {}", secret_bytes.len());
         let session_key = Key::from(
-            &<[u8; 32]>::try_from(secret_bytes.as_slice())
-                .expect("HMAC_SECRET must decode to exactly 32 bytes (64 hex chars)"),
+            &<[u8; 64]>::try_from(secret_bytes.as_slice())
+                .expect("HMAC_SECRET must decode to exactly 64 bytes (128 hex chars)"),
         );
 
         // AUDIT FIX: Provide a random number generator (RNG) for CSRF middleware in tests.
@@ -488,8 +500,25 @@ mod tests {
 
         // Split the response to handle body and cookies separately, avoiding borrow issues.
         let (_req, resp_head) = resp.into_parts();
+        // Print all set-cookie headers for diagnostics
+        println!("[DEBUG] Set-Cookie headers:");
+        for value in resp_head.headers().get_all(header::SET_COOKIE) {
+            println!("  Set-Cookie: {}", value.to_str().unwrap_or("<invalid>"));
+        }
         // We must collect the cookies to release the borrow on `resp_head` before getting the body.
         let cookies: Vec<_> = resp_head.cookies().map(|c| c.into_owned()).collect();
+        // Debug print all cookies for diagnostics
+        println!("[DEBUG] Cookies found in response:");
+        for c in &cookies {
+            println!(
+                "  {}: {} (secure: {:?}, http_only: {:?})",
+                c.name(),
+                c.value(),
+                c.secure(),
+                c.http_only()
+            );
+        }
+        let cookie_names: Vec<_> = cookies.iter().map(|c| c.name().to_string()).collect();
         let body = actix_web::body::to_bytes(resp_head.into_body())
             .await
             .unwrap();
@@ -498,7 +527,9 @@ mod tests {
         let session_cookie = cookies
             .iter()
             .find(|c| c.name() == "erp-session")
-            .expect("Session cookie not found")
+            .unwrap_or_else(|| {
+                panic!("Session cookie not found. Cookies present: {cookie_names:?}")
+            })
             .clone();
         let csrf_cookie = cookies
             .iter()
@@ -613,28 +644,12 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let (_req, resp_head) = resp.into_parts();
-        let cookies: Vec<_> = resp_head.cookies().map(|c| c.into_owned()).collect();
         let headers = resp_head.headers().clone();
         let body = actix_web::body::to_bytes(resp_head.into_body())
             .await
             .unwrap();
         let body_str = std::str::from_utf8(&body).unwrap();
 
-        println!("All cookies:");
-        for c in &cookies {
-            println!(
-                "  {}: {} (secure: {:?}, http_only: {:?})",
-                c.name(),
-                c.value(),
-                c.secure(),
-                c.http_only()
-            );
-        }
-        println!("All headers:");
-
-        for (k, v) in headers.iter() {
-            println!("  {}: {:?}", k, v);
-        }
         // Instead of checking cookies directly, check for CSRF token in the response body (Actix test harness limitation)
         assert!(
             body_str.contains("csrf-token"),
@@ -650,7 +665,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = test::read_body(resp).await;
         let body_str = std::str::from_utf8(&body).unwrap();
-        println!("/test/cookies response body:\n{}", body_str);
+        println!("/test/cookies response body:\n{body_str}");
         // Instead of checking cookies directly, check for CSRF token in the response body
         assert!(
             body_str.contains("csrf-token"),
@@ -672,7 +687,7 @@ mod tests {
                 .extensions()
                 .get::<actix_csrf::extractor::CsrfToken>()
                 .map(|t| t.clone().into_inner());
-            println!("[MINIMAL DEBUG] CSRF token in extensions: {:?}", csrf_token);
+            println!("[MINIMAL DEBUG] CSRF token in extensions: {csrf_token:?}");
             let mut s = String::new();
             match req.cookies() {
                 Ok(ref_cookies) => {
@@ -683,13 +698,13 @@ mod tests {
                 Err(_) => s.push_str("No cookies found\n"),
             }
             if let Some(token) = csrf_token {
-                s.push_str(&format!("csrf-token: {}\n", token));
+                s.push_str(&format!("csrf-token: {token}\n"));
             }
             HttpResponse::Ok().content_type("text/plain").body(s)
         }
 
         let session_key =
-            Key::from(b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+            Key::from(b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
         let rng = StdRng::from_entropy();
         let session_middleware =
             SessionMiddleware::builder(CookieSessionStore::default(), session_key)
@@ -721,11 +736,60 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = test::read_body(resp).await;
         let body_str = std::str::from_utf8(&body).unwrap();
-        println!("[MINIMAL DEBUG] /csrf-test response body:\n{}", body_str);
+        println!("[MINIMAL DEBUG] /csrf-test response body:\n{body_str}");
         // Instead of checking cookies directly, check for CSRF token in the response body
         assert!(
             body_str.contains("csrf-token"),
             "CSRF token not found in minimal app test response body"
         );
     }
-}
+
+    #[actix_web::test]
+    async fn test_cert_key_mismatch_gives_error() {
+        use rustls::crypto::ring::default_provider;
+        use rustls::crypto::CryptoProvider;
+        CryptoProvider::install_default(default_provider());
+        // Write mismatched cert and key
+        std::fs::create_dir_all("certs").unwrap();
+        let cert = b"-----BEGIN CERTIFICATE-----\nMIIB...fake...\n-----END CERTIFICATE-----\n";
+        let key = b"-----BEGIN PRIVATE KEY-----\nMIIE...fake...\n-----END PRIVATE KEY-----\n";
+        let mut cert_file = std::fs::File::create("certs/cert.pem").unwrap();
+        use std::io::Write;
+        cert_file.write_all(cert).unwrap();
+        let mut key_file = std::fs::File::create("certs/key.pem").unwrap();
+        key_file.write_all(key).unwrap();
+        // Try to load with mismatched files
+        let result = super::load_rustls_config();
+        assert!(result.is_err(), "Should error on mismatched cert/key");
+    }
+
+    #[actix_web::test]
+    async fn test_cert_key_match_succeeds() {
+        use rustls::crypto::ring::default_provider;
+        use rustls::crypto::CryptoProvider;
+        CryptoProvider::install_default(default_provider());
+        // Generate a new matching cert/key pair using openssl
+        std::fs::create_dir_all("certs").unwrap();
+        let _ = std::process::Command::new("openssl")
+            .args([
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-keyout",
+                "certs/key.pem",
+                "-out",
+                "certs/cert.pem",
+                "-sha256",
+                "-days",
+                "1",
+                "-nodes",
+                "-subj",
+                "/CN=localhost",
+            ])
+            .output()
+            .unwrap();
+        let result = super::load_rustls_config();
+        assert!(result.is_ok(), "Should succeed with matching cert/key");
+    }
+} // End of tests module

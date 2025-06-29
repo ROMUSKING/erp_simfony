@@ -15,6 +15,7 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
+        println!("[DEBUG] Entered Config::from_env()");
         dotenv().ok(); // Load .env file if it exists
 
         let host = env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
@@ -35,6 +36,8 @@ impl Config {
             .parse::<u64>()?;
         let admin_username = env::var("ADMIN_USERNAME")?;
         let password_hash = env::var("PASSWORD_HASH")?;
+
+        println!("[DEBUG] Leaving Config::from_env()");
 
         Ok(Self {
             host,

@@ -15,6 +15,7 @@ Cargo.lock
 .env
 session_key.bin
 certs/key.pem
+certs/cert.pem
 code.md
 # Mac-specific files
 .DS_Store
