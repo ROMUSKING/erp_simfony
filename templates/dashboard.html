@@ -1,0 +1,32 @@
+{% extends "index.html.tera" %}
+{% block title %}Dashboard - ERP Simfony{% endblock %}
+{% block header %}
+<header class="dashboard-header">
+    <h1>ERP Simfony</h1>
+    <div class="user-info">
+        <span>Welcome, <strong>{{ username }}</strong>!</span>
+        <form action="/logout" method="post" style="display: inline; margin-left: 1rem;">
+            <button type="submit" class="button">Logout</button>
+        </form>
+    </div>
+</header>
+{% endblock %}
+{% block content %}
+<h2>Dashboard</h2>
+<p>This is your main application dashboard. More features will be added here soon.</p>
+
+<div class="dashboard-widgets">
+    <div class="widget">
+        <h3>Sales Overview</h3>
+        <p>Monthly sales charts and key performance indicators will be displayed here.</p>
+    </div>
+    <div class="widget">
+        <h3>Inventory Status</h3>
+        <p>A summary of stock levels, low-stock alerts, and recent inventory movements.</p>
+    </div>
+    <div class="widget">
+        <h3>Recent Activity</h3>
+        <p>A log of recent user actions and system events.</p>
+    </div>
+</div>
+{% endblock %}

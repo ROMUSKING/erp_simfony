@@ -1,0 +1,10 @@
+{% extends "index.html.tera" %}
+{% block content %}
+<form method="post" action="/login">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="text" name="username" placeholder="Username">
+    <input type="password" name="password" placeholder="Password">
+    <button type="submit">Login</button>
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+</form>
+{% endblock %}

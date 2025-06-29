@@ -9,6 +9,8 @@ pub struct Config {
     pub rate_limit_burst_size: u32,
     pub hmac_secret: String,
     pub session_max_age_seconds: u64,
+    pub admin_username: String,
+    pub password_hash: String,
 }
 
 impl Config {
@@ -31,6 +33,8 @@ impl Config {
         let session_max_age_seconds = env::var("SESSION_MAX_AGE_SECONDS")
             .unwrap_or_else(|_| "3600".to_string()) // Defaults to 1 hour
             .parse::<u64>()?;
+        let admin_username = env::var("ADMIN_USERNAME")?;
+        let password_hash = env::var("PASSWORD_HASH")?;
 
         Ok(Self {
             host,
@@ -39,6 +43,8 @@ impl Config {
             rate_limit_burst_size,
             hmac_secret,
             session_max_age_seconds,
+            admin_username,
+            password_hash,
         })
     }
 }

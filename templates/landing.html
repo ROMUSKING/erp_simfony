@@ -1,0 +1,12 @@
+{% extends "index.html.tera" %}
+{% block title %}Welcome to ERP Simfony{% endblock %}
+{% block header %}
+<header>
+    <h1>Welcome to ERP Simfony</h1>
+    <p>A demonstration of a secure, modern enterprise application.</p>
+</header>
+{% endblock %}
+{% block content %}
+<p>This is the public landing page. The main application requires authentication.</p>
+<a href="/login" class="button">Proceed to Login</a>
+{% endblock %}

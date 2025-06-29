@@ -1,16 +1,13 @@
+use crate::config::Config;
 use crate::errors::AppError;
-use actix_session::{Session, SessionExt};
-use actix_web::{dev::Payload, guard, web, FromRequest, HttpRequest, HttpResponse, Responder};
+use actix_session::Session;
+use actix_session::SessionExt;
+use actix_web::{dev::Payload, web, FromRequest, HttpRequest, HttpResponse, Responder};
+use futures_util::future::{ready, Ready};
 use serde::{Deserialize, Serialize};
-use std::future::{ready, Ready};
-use validator::{Validate, ValidationError, ValidationErrors}; // For input validation // For password hashing and verification
+use validator::{Validate, ValidationError, ValidationErrors}; // For input validation
 
 const USER_KEY: &str = "user";
-// In a real app, this would come from a database.
-const ADMIN_USERNAME: &str = "admin";
-// This is the bcrypt hash for "password123".
-// Generated with: `bcrypt::hash("password123", bcrypt::DEFAULT_COST).unwrap()`
-const PASSWORD_HASH: &str = "$2b.uB9X.B9X.B9X.B9X.B9X.B9X.B";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct User {
@@ -43,25 +40,26 @@ impl AuthSession {
 }
 
 /// Implements the FromRequest trait so that AuthSession can be used as a handler extractor.
+/// Redirects to /login if not authenticated.
 impl FromRequest for AuthSession {
     type Error = actix_web::Error;
     type Future = Ready<Result<Self, Self::Error>>;
 
-    fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
-        // This relies on the SessionMiddleware being registered.
-        ready(Ok(AuthSession(
-            Session::from_request(req, payload).into_inner().unwrap(),
-        )))
-    }
-}
-
-/// A guard to protect routes that require authentication.
-pub struct AuthGuard;
-
-impl guard::Guard for AuthGuard {
-    fn check(&self, ctx: &guard::GuardContext<'_>) -> bool {
-        let session = ctx.get_session();
-        session.get::<User>(USER_KEY).ok().flatten().is_some()
+    fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
+        let session = req.get_session();
+        let is_authenticated = session.get::<User>(USER_KEY).ok().flatten().is_some();
+        if is_authenticated {
+            ready(Ok(AuthSession(session)))
+        } else {
+            let resp = HttpResponse::SeeOther()
+                .append_header(("Location", "/login"))
+                .finish();
+            ready(Err(actix_web::error::InternalError::from_response(
+                "Not authenticated",
+                resp,
+            )
+            .into()))
+        }
     }
 }
 
@@ -78,35 +76,31 @@ pub struct LoginData {
 /// Handler for the POST /login request.
 /// AUDIT FIX: Replaced placeholder logic with secure password verification.
 pub async fn login_post(
-    session: AuthSession,
+    session: Session,
     form: web::Form<LoginData>,
+    config: web::Data<Config>, // <-- Add config extractor
 ) -> Result<impl Responder, AppError> {
-    // 1. Rigorous Input Validation (Blueprint Control)
     form.validate()?;
 
     let username = &form.username;
     let password = &form.password;
 
-    // 2. Verify credentials (simulated user lookup)
-    if username == ADMIN_USERNAME {
-        // 3. Use bcrypt to securely verify the password
-        let is_valid = bcrypt::verify(password, PASSWORD_HASH).unwrap_or(false);
+    // Use config values instead of constants
+    if username == &config.admin_username {
+        let is_valid = bcrypt::verify(password, &config.password_hash).unwrap_or(false);
 
         if is_valid {
-            // 4. On success, create the session
             let user = User {
                 username: username.clone(),
             };
-            session.login(user)?;
+            AuthSession(session).login(user)?;
             tracing::info!("Successful login for user: {}", username);
-            // Redirect to the main application page
             return Ok(HttpResponse::SeeOther()
-                .append_header(("Location", "/"))
+                .append_header(("Location", "/app"))
                 .finish());
         }
     }
 
-    // 5. Log failed attempts and return a generic error (Blueprint Control)
     tracing::warn!("Failed login attempt for username: {}", username);
     let mut errors = ValidationErrors::new();
     let mut error = ValidationError::new("credentials");

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - ERP Simfony</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>Login to ERP Simfony</h1>
+        </header>
+        <main>
+            <form id="login-form" method="post" action="/login">
+                <div id="error-message" class="error-text" style="color: red; margin-bottom: 1rem;">
+                    {% if error and error is not empty %}
+                    {{ error }}
+                    {% endif %}
+                </div>
+
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" name="username" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required>
+                </div>
+
+                <button type="submit" class="button">Login</button>
+            </form>
+        </main>
+    </div>
+    <script nonce="{{ nonce }}">
+        document.getElementById('login-form').addEventListener('submit', async function (event) {
+            event.preventDefault();
+
+            const form = event.target;
+            const formData = new FormData(form);
+            const errorMessageDiv = document.getElementById('error-message');
+            errorMessageDiv.textContent = ''; // Clear previous errors
+
+            const response = await fetch(form.action, {
+                method: 'POST',
+                body: new URLSearchParams(formData)
+            });
+
+            if (response.ok && response.redirected) {
+                window.location.href = response.url;
+            } else if (!response.ok) {
+                const data = await response.json();
+                if (data.error && data.error.message) {
+                    errorMessageDiv.textContent = data.error.message;
+                } else {
+                    errorMessageDiv.textContent = 'An unknown error occurred.';
+                }
+            } else {
+                // Fallback for non-redirected OK responses
+                window.location.href = '/app';
+            }
+        });
+    </script>
+</body>
+
+</html>
