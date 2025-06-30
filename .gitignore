@@ -17,5 +17,6 @@ session_key.bin
 certs/key.pem
 certs/cert.pem
 code.md
+.pass
 # Mac-specific files
 .DS_Store
